@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Secure Portal</title>
+    
+    <!-- Load Power BI JavaScript Client SDK from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.22.3/dist/powerbi.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 40px;
+            background-color: #f4f6f9;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        .selector-box {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+        }
+        select {
+            padding: 8px 12px;
+            font-size: 16px;
+            border-radius: 4px;
+            border: 1px solid #ced4da;
+            width: 300px;
+        }
+        /* Container where report will render */
+        #reportContainer {
+            height: 600px;
+            width: 100%;
+            border: 1px solid #e1e4e8;
+            border-radius: 4px;
+            background-color: #fafbfc;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Internal Client Dashboard</h1>
+        
+        <!-- Dropdown Selector box -->
+        <div class="selector-box">
+            <label for="reportSelector" style="font-weight: bold; margin-right: 10px;">Select Report:</label>
+            <select id="reportSelector" onchange="switchReport(this.value)">
+                {% for r in reports %}
+                    <option value="{{ r.id }}" {% if r.id == selected_report_id %}selected{% endif %}>
+                        {{ r.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <!-- Target Div for Power BI embed -->
+        <div id="reportContainer"></div>
+    </div>
+
+    <script>
+        // Retrieve variables injected securely by the Flask backend
+        const embedToken = "{{ embed_token }}";
+        const embedUrl = "{{ embed_url }}";
+        const reportId = "{{ selected_report_id }}";
+
+        // Function to reload the page with the selected report ID
+        function switchReport(selectedId) {
+            window.location.href = "/?reportId=" + selectedId;
+        }
+
+        // Access the Power BI models object
+        const models = window['powerbi-client'].models;
+
+        // Embedding configuration object
+        const config = {
+            type: 'report',
+            tokenType: models.TokenType.Embed, 
+            accessToken: embedToken,
+            embedUrl: embedUrl,
+            id: reportId,
+            permissions: models.Permissions.Read,
+            settings: {
+                filterPaneEnabled: false, 
+                navContentPaneEnabled: true 
+            }
+        };
+
+        // Get reference to the container
+        const reportContainer = document.getElementById('reportContainer');
+
+        // Render the report
+        const report = powerbi.embed(reportContainer, config);
+    </script>
+</body>
+</html>

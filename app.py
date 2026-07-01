@@ -1,4 +1,4 @@
-print("--- STARTING POWER BI VERCEL SERVER ---")
+print("--- STARTING POWER BI SECURE PORTAL WITH AZURE DATABASE ---")
 
 import os
 import requests
@@ -8,7 +8,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
-# Load local .env file for local testing (will be ignored on Vercel)
+# Load local .env file for local testing (ignored on Vercel)
 load_dotenv()
 
 app = Flask(__name__)
@@ -16,9 +16,10 @@ app = Flask(__name__)
 # --- SECURE SESSION KEY ---
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "local_development_fallback_key")
 
-# --- VERCEL-COMPATIBLE DATABASE CONFIGURATION ---
-# We write the database to the /tmp folder because the rest of Vercel's filesystem is read-only
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/users.db'
+# --- DATABASE CONFIGURATION ---
+# 1. On Vercel: Reads your Azure PostgreSQL connection string (DATABASE_URL)
+# 2. Locally: Falls back to a Windows-friendly local SQLite file (sqlite:///users.db)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "sqlite:///users.db")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -28,11 +29,21 @@ login_manager.login_view = 'login'
 login_manager.init_app(app)
 
 
-# --- USER MODEL (Database Table Schema) ---
+# --- USER & PERMISSIONS DATABASE MODELS ---
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
+    
+    # Relationship linking users to their allowed reports
+    permissions = db.relationship('UserReportPermission', backref='user', lazy=True)
+
+class UserReportPermission(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    report_id = db.Column(db.String(100), nullable=False) # Power BI Report ID
+
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -84,7 +95,7 @@ def get_embed_token(access_token, report_id):
     return res.json().get("token")
 
 
-# --- ROUTE 1: THE SECURE DASHBOARD ---
+# --- ROUTE 1: THE SECURE DASHBOARD (URL Masked) ---
 @app.route('/')
 @login_required
 def home():
@@ -94,19 +105,34 @@ def home():
             return "Configuration Error: Missing Environment Variables on the Server.", 500
 
         access_token = get_azure_access_token()
-        reports = get_all_reports(access_token)
+        all_reports = get_all_reports(access_token)
         
-        if not reports:
+        if not all_reports:
             return "No reports found in this workspace.", 404
 
-        selected_report_id = request.args.get('reportId')
-        if not selected_report_id:
+        # 1. Query the database for this user's allowed report IDs
+        user_permissions = UserReportPermission.query.filter_by(user_id=current_user.id).all()
+        allowed_ids = [p.report_id for p in user_permissions]
+        
+        # 2. Administrative Fallback:
+        # If the logged-in user is 'admin' and has no permissions in the database yet,
+        # grant them access to all workspace reports so you can set things up.
+        if current_user.username == "admin" and not allowed_ids:
+            allowed_ids = [r['id'] for r in all_reports]
+
+        # 3. Filter the Power BI reports list based on permissions
+        reports = [r for r in all_reports if r['id'] in allowed_ids]
+        
+        if not reports:
+            return f"Access Denied: No reports assigned to user '{current_user.username}' in the database.", 403
+
+        # 4. Handle report selection securely using session state (URL Masking)
+        selected_report_id = session.get('selected_report_id')
+        if not selected_report_id or selected_report_id not in allowed_ids:
             selected_report_id = reports[0]['id']
+            session['selected_report_id'] = selected_report_id
 
         selected_report = next((r for r in reports if r['id'] == selected_report_id), None)
-        if not selected_report:
-            return "Selected report not found in this workspace.", 404
-
         embed_url = selected_report['embedUrl']
         embed_token = get_embed_token(access_token, selected_report_id)
 
@@ -122,7 +148,17 @@ def home():
         return f"Error loading Power BI Reports: {str(e)}", 500
 
 
-# --- ROUTE 2: THE LOGIN SCREEN ---
+# --- ROUTE 2: SELECTION FORM SUBMISSION (No URL Change) ---
+@app.route('/select-report', methods=['POST'])
+@login_required
+def select_report():
+    report_id = request.form.get('reportId')
+    if report_id:
+        session['selected_report_id'] = report_id
+    return redirect(url_for('home'))
+
+
+# --- ROUTE 3: THE LOGIN SCREEN ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -143,11 +179,11 @@ def login():
     return render_template("login.html")
 
 
-# --- ROUTE 3: LOGOUT ROUTE ---
+# --- ROUTE 4: LOGOUT ROUTE ---
 @app.route('/logout')
 @login_required
 def logout():
-    logout_user()
+    session.clear() # Clears session cookies
     return redirect(url_for('login'))
 
 

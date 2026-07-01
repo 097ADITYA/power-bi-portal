@@ -110,23 +110,22 @@ def home():
         if not all_reports:
             return "No reports found in this workspace.", 404
 
-        # 1. Query the database for this user's allowed report IDs
-        user_permissions = UserReportPermission.query.filter_by(user_id=current_user.id).all()
-        allowed_ids = [p.report_id for p in user_permissions]
-        
-        # 2. Administrative Fallback:
-        # If the logged-in user is 'admin' and has no permissions in the database yet,
-        # grant them access to all workspace reports so you can set things up.
-        if current_user.username == "admin" and not allowed_ids:
+        # --- ADMIN BYPASS / CLIENT PERMISSIONS CHECK ---
+        # If the logged-in user is 'admin', grant them access to ALL reports in the workspace.
+        # Otherwise, query the database for the specific allowed report IDs.
+        if current_user.username == "admin":
             allowed_ids = [r['id'] for r in all_reports]
-
-        # 3. Filter the Power BI reports list based on permissions
+        else:
+            user_permissions = UserReportPermission.query.filter_by(user_id=current_user.id).all()
+            allowed_ids = [p.report_id for p in user_permissions]
+        
+        # Filter the Power BI reports list based on allowed IDs
         reports = [r for r in all_reports if r['id'] in allowed_ids]
         
         if not reports:
             return f"Access Denied: No reports assigned to user '{current_user.username}' in the database.", 403
 
-        # 4. Handle report selection securely using session state (URL Masking)
+        # Handle report selection securely using session state (URL Masking)
         selected_report_id = session.get('selected_report_id')
         if not selected_report_id or selected_report_id not in allowed_ids:
             selected_report_id = reports[0]['id']
